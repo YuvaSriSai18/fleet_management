@@ -1,322 +1,174 @@
-# 🚚 Delivery & Proof of Delivery (PoD) Smart Contracts
+# 🚚 Fleet Delivery + Escrow System – Overview
 
-This project implements a **blockchain-based delivery tracking system** with two main contracts:
-
-1. **DeliveryManagement** – Manages the lifecycle of deliveries (create, update, track status).
-2. **ProofOfDelivery (PoD)** – Records GPS checkpoints for deliveries and finalizes them securely.
+This system is built with **four smart contracts** that work together to manage delivery orders, track proof of delivery, and handle payments securely via escrow.
 
 ---
 
-## ⚙️ How it Works
+## 1. **AccessRegistry.sol**
 
-### **1. Delivery Creation**
+### Purpose
 
-* A delivery is created by any user (logistics company / admin).
-* Each delivery stores:
+* Acts as the **role manager** for the system.
+* Controls who can perform critical actions (FleetOwner, Carrier, Customer).
 
-  * `orderId` (auto-incremented)
-  * `truckId` (identifier of the vehicle)
-  * `origin` and `destination`
-  * `ETA` (expected delivery time)
-  * `createdBy` (the wallet that created it)
-  * `status` (enum: Pending → InTransit → Delivered → Failed)
+### Key Features
 
-```solidity
-orderId = deliveryManagement.createDelivery(truckId, origin, destination, eta);
-```
+* `assignRole(address, Role)` – Owner assigns a role.
+* `revokeRole(address, Role)` – Owner revokes a role.
+* `hasRole(address, Role)` – Used by other contracts to validate permissions.
 
----
+### Why it matters
 
-### **2. Updating Delivery Status**
-
-* Only two parties can update a delivery:
-
-  1. The **creator** of the delivery.
-  2. The **ProofOfDelivery contract** (when finalizing).
-
-```solidity
-deliveryManagement.updateDeliveryStatus(orderId, DeliveryStatus.InTransit);
-```
+All other contracts **trust AccessRegistry** to know “who is who”.
 
 ---
 
-### **3. Adding GPS Checkpoints (Proof Recording)**
+## 2. **DeliveryManagement.sol**
 
-* GPS checkpoints are added to the **PoD contract**.
-* Each checkpoint includes:
+### Purpose
 
-  * `latitude`
-  * `longitude`
-  * `timestamp`
+* Manages **delivery lifecycle** (Created → InTransit → Delivered → Cancelled).
+* Enforces that only `ProofOfDelivery` can finalize delivery.
 
-```solidity
-proofOfDelivery.addCheckpoint(orderId, 1745243, 7845521, 1724672821);
-```
+### Key Functions
 
-➡️ When the **first checkpoint** is added, the proof is marked as *initialized*.
+* `createDelivery(orderId, customer, carrier)` – Registers a delivery.
+* `updateStatus(orderId, Status)` – Changes state (except Delivered).
+* `markDeliveredFromPoD(orderId)` – Marks a delivery Delivered when PoD finalizes.
 
----
+### Why it matters
 
-### **4. Finalizing a Delivery**
-
-* Only the **PoD contract** can finalize a delivery.
-* A delivery can only be finalized if:
-
-  * At least one checkpoint exists (`proof.initialized == true`).
-
-```solidity
-proofOfDelivery.finalizeDelivery(orderId);
-```
-
-➡️ This will:
-
-1. Set the delivery status to `Delivered`.
-2. Emit an event `DeliveryFinalized`.
+This contract is the **source of truth** for the state of each order.
+It also acts as the bridge between **ProofOfDelivery** and **Escrow**.
 
 ---
 
-## 👥 Roles & Permissions
+## 3. **ProofOfDelivery.sol**
 
-| Actor                           | Actions                                                           |
-| ------------------------------- | ----------------------------------------------------------------- |
-| **Creator (Logistics Company)** | - Create delivery<br>- Update delivery status manually (optional) |
-| **ProofOfDelivery Contract**    | - Add checkpoints<br>- Finalize delivery (sets Delivered status)  |
-| **Public**                      | - View deliveries & proofs (read-only)                            |
+### Purpose
+
+* Records GPS checkpoints and allows **finalization** of delivery.
+* When finalized, it tells `DeliveryManagement` to mark the order as Delivered.
+
+### Key Functions
+
+* `addCheckpoint(orderId, lat, lon, ts)` – Logs location updates.
+* `finalize(orderId)` – Finalizes proof and triggers delivery completion.
+* `getCheckpoints(orderId)` – View checkpoints.
+
+### Why it matters
+
+Ensures that **only authorized actors** (FleetOwner/Carrier) can finalize delivery, preventing fraud.
 
 ---
 
-## 🚀 Example Flow
+## 4. **Escrow\.sol (PaymentEscrow)**
 
-Let’s say **LogiTrans Pvt Ltd** is delivering goods from **Hyderabad → Bangalore** using `Truck-123`.
+### Purpose
 
-### Step 1: Create Delivery
+* Holds funds until delivery is completed.
+* Releases payment automatically once Delivery is finalized.
+
+### Key Functions
+
+* `createEscrowETH(orderId, payee)` – Customer deposits ETH.
+* `createEscrowERC20(orderId, token, payee, amount)` – Deposit tokens.
+* `releasePayment(orderId)` – Sends funds to Carrier (only callable by Delivery contract).
+* `refund(orderId)` – Allows payer to reclaim funds before delivery.
+* `applyPenalty(orderId, penalty)` – Admin can reduce payment for violations.
+
+### Why it matters
+
+Protects both **customers** and **carriers** by ensuring money is only transferred if delivery is successful.
+
+---
+
+## 🔗 How They Work Together
+
+Here’s the flow:
+
+1. **Setup Roles**
+
+   * Owner assigns roles via `AccessRegistry` (FleetOwner, Carrier, Customer).
+
+2. **Create Delivery**
+
+   * FleetOwner calls `createDelivery` in `DeliveryManagement`.
+   * Customer simultaneously funds escrow via `createEscrowETH`.
+
+3. **In Transit**
+
+   * Carrier updates checkpoints in `ProofOfDelivery`. (Optional)
+
+4. **Finalize Delivery**
+
+   * Carrier/FleetOwner calls `finalize(orderId)` in PoD.
+   * PoD → calls `markDeliveredFromPoD(orderId)` in DeliveryManagement.
+   * DeliveryManagement → calls `releasePayment(orderId)` in Escrow.
+   * Escrow → pays Carrier.
+
+---
+
+## 🔧 Deployment & Connection Steps
+
+1. **Deploy AccessRegistry**
+   Save address.
+
+2. **Deploy DeliveryManagement** (pass AccessRegistry address).
+   Save address.
+
+3. **Deploy ProofOfDelivery** (pass AccessRegistry + DeliveryManagement).
+   Call `DeliveryManagement.setProofOfDelivery(podAddress)`.
+
+4. **Deploy Escrow** (pass DeliveryManagement address).
+   Call `DeliveryManagement.setEscrow(escrowAddress)` if you extend it.
+
+Now all 4 contracts are connected.
+
+---
+
+## 🌐 Frontend Integration
+
+From frontend (React + ethers.js):
+
+### 1. Connect to Contracts
 
 ```js
-orderId = deliveryManagement.createDelivery(
-  "Truck-123",
-  "Hyderabad",
-  "Bangalore",
-  1724800000 // ETA
-);
+import { ethers } from "ethers";
+import AccessABI from "./abis/AccessRegistry.json";
+import DeliveryABI from "./abis/DeliveryManagement.json";
+import PodABI from "./abis/ProofOfDelivery.json";
+import EscrowABI from "./abis/Escrow.json";
+
+const provider = new ethers.BrowserProvider(window.ethereum);
+const signer = await provider.getSigner();
+
+const access = new ethers.Contract(ACCESS_ADDR, AccessABI, signer);
+const delivery = new ethers.Contract(DELIVERY_ADDR, DeliveryABI, signer);
+const pod = new ethers.Contract(POD_ADDR, PodABI, signer);
+const escrow = new ethers.Contract(ESCROW_ADDR, EscrowABI, signer);
 ```
 
-➡️ `orderId = 1` created with status `Pending`.
+### 2. Example Actions
 
----
-
-### Step 2: Add Checkpoints
-
-Truck moves along the route → checkpoints are added.
+* **Customer funds escrow:**
 
 ```js
-proofOfDelivery.addCheckpoint(1, 1745243, 7845521, 1724672821); // Hyderabad
-proofOfDelivery.addCheckpoint(1, 1745300, 7846000, 1724680000); // En route
+await escrow.createEscrowETH(orderId, carrierAddr, { value: ethers.parseEther("1.0") });
 ```
 
-➡️ Proof initialized and checkpoints recorded.
-
----
-
-### Step 3: Finalize Delivery
-
-When the truck reaches Bangalore:
+* **Carrier finalizes delivery:**
 
 ```js
-proofOfDelivery.finalizeDelivery(1);
+await pod.finalize(orderId);
 ```
 
-➡️ Delivery status automatically updated to **Delivered**.
+* **Listen for events:**
+
+```js
+escrow.on("EscrowReleased", (orderId, amount, to) => {
+  console.log("Payment sent:", orderId, amount, to);
+});
+```
 
 ---
-
-## 📜 Events
-
-* `DeliveryCreated(orderId, truckId, origin, destination, eta, createdBy)`
-* `DeliveryStatusUpdated(orderId, newStatus, updatedAt)`
-* `CheckpointAdded(orderId, latitude, longitude, timestamp)`
-* `DeliveryFinalized(orderId, finalizedAt)`
-
----
-
-✅ With this system:
-
-* The **company** creates deliveries.
-* The **PoD contract** ensures GPS proof exists before finalizing.
-* No one can finalize a delivery without proof.
-
----
-
-
-Perfect 🚀 now I see the **big picture**. You’re basically building the **blockchain layer of QuantumFleet** – 5 contracts that make logistics **tamper-proof, automated, and auditable**, while quantum optimization engines (Qiskit, D-Wave, etc.) feed real-time decisions to this layer.
-
-Since you’ve already completed ✅ **1. DeliveryManagement** and ✅ **2. ProofOfDelivery**, let me frame everything as a **README/Project Overview** that explains **what each contract does, how they connect, who uses them, and how it fits into your QuantumFleet system.**
-
----
-
-# 🛰️ QuantumFleet Blockchain Layer
-
-### Securing Logistics with Blockchain + Quantum Optimization
-
----
-
-## 🔹 Why Blockchain + Quantum?
-
-Logistics suffers from delays, inefficiencies, and lack of trust between carriers, 3PLs, and customers.
-QuantumFleet solves this with a **hybrid quantum-classical optimization engine** + **blockchain smart contracts**:
-
-* **Quantum computing** → Optimizes routes, load balancing, fleet utilization.
-* **Blockchain** → Secures shipment data, automates payments, enables transparent 3PL collaboration.
-* **Integration** → APIs connect live telematics, GPS/GIS data, and quantum solvers with blockchain records.
-
----
-
-## 📦 Smart Contract Modules
-
-### **1. Delivery Management Contract (Core)** ✅ Done
-
-**Purpose:** Immutable record of shipments.
-
-* `createDelivery(orderId, truckId, origin, destination, eta)` → Create delivery.
-* `updateDeliveryStatus(orderId, status)` → Update status (Created, InTransit, Delivered, Cancelled).
-* `getDelivery(orderId)` → Fetch delivery details.
-
-**Events:**
-
-* `DeliveryCreated`
-* `DeliveryStatusUpdated`
-
-✅ Guarantees transparent, tamper-proof shipment records.
-
----
-
-### **2. Proof of Delivery (PoD) Contract** ✅ Done
-
-**Purpose:** Secure completion verification via geofencing/GPS.
-
-* `addCheckpoint(orderId, lat, long, timestamp)` → Log GPS checkpoint.
-* `finalizeDelivery(orderId)` → Mark delivery complete, syncs with DeliveryManagement.
-
-**Events:**
-
-* `CheckpointAdded`
-* `DeliveryFinalized`
-
-✅ Provides auditable delivery verification for compliance & SLAs.
-
----
-
-### **3. Capacity Sharing & Load Exchange Contract** ⏳ Next
-
-**Purpose:** Enable 3PL collaboration by sharing unused truck space.
-
-* `listCapacity(truckId, capacity, route, price)` → Advertise available capacity.
-* `bookCapacity(truckId, buyer, loadSize)` → Reserve capacity.
-* `cancelBooking(truckId, bookingId)` → Cancel booking.
-
-**Events:**
-
-* `CapacityListed`
-* `CapacityBooked`
-* `BookingCancelled`
-
-✅ Encourages collaboration, improves fleet utilization, reduces empty runs.
-
----
-
-### **4. Payment & SLA Smart Contract** ⏳ Next
-
-**Purpose:** Automates payments & penalties.
-
-* `createEscrow(orderId, payer, payee, amount)` → Hold funds.
-* `releasePayment(orderId)` → Transfer funds once delivered.
-* `applyPenalty(orderId, reason, penaltyAmount)` → Deduct for SLA violations.
-
-**Events:**
-
-* `EscrowCreated`
-* `PaymentReleased`
-* `PenaltyApplied`
-
-✅ Trustless settlement, no disputes.
-
----
-
-### **5. Stakeholder Identity & Access Contract** ⏳ Next
-
-**Purpose:** Role-based access control.
-
-* `registerUser(address, role)` → Register stakeholder (Fleet Owner, Carrier, 3PL, Customer).
-* `getUserRole(address)` → Fetch role.
-* `grantRole(address, role)` / `revokeRole(address, role)` → Admin controls.
-
-✅ Prevents unauthorized access; ensures only valid actors can update records.
-
----
-
-## 🔄 Example Workflow
-
-Let’s say **LogiTrans Pvt Ltd** delivers **Hyderabad → Bangalore**:
-
-1. **Delivery Created**
-
-   ```solidity
-   deliveryManagement.createDelivery("Truck-123", "Hyderabad", "Bangalore", 1724800000);
-   ```
-
-   → Status = `Created`.
-
-2. **Route Optimization (Quantum Layer)**
-   QuantumFleet engine (QAOA/D-Wave) optimizes truck route & load distribution.
-
-3. **Proof-of-Delivery Checkpoints**
-
-   ```solidity
-   proofOfDelivery.addCheckpoint(1, 1745243, 7845521, 1724672821); // Hyderabad
-   proofOfDelivery.addCheckpoint(1, 1745300, 7846000, 1724680000); // En route
-   ```
-
-   → Blockchain records GPS logs.
-
-4. **Delivery Finalized**
-
-   ```solidity
-   proofOfDelivery.finalizeDelivery(1);
-   ```
-
-   → Status = `Delivered`, PoD stored.
-
-5. **Payment Released (Escrow)**
-
-   ```solidity
-   paymentContract.releasePayment(1);
-   ```
-
-   → Carrier gets paid, automatically.
-
----
-
-## 👥 Stakeholder Roles
-
-| Role            | Capabilities                           |
-| --------------- | -------------------------------------- |
-| **Fleet Owner** | Create deliveries, list truck capacity |
-| **Carrier**     | Add checkpoints, finalize deliveries   |
-| **3PL**         | Book spare capacity, track shipments   |
-| **Customer**    | View delivery status, payments         |
-| **Admin**       | Manage user roles, ensure compliance   |
-
----
-
-## 🌍 Benefits
-
-* **Economic** → Reduced costs via optimized routes & shared capacity.
-* **Social** → Collaboration between carriers & 3PLs.
-* **Environmental** → Lower emissions, fewer empty runs.
-* **Technological** → Future-proof logistics using quantum + blockchain.
-
----
-
-👉 This README sets the foundation.
-Since you’ve **done 1 & 2 already**, the next natural step is **3. Capacity Sharing Contract**.
-
-Do you want me to draft a **Solidity skeleton for Capacity Sharing (3)**, aligned with your 1 & 2 contracts, so it plugs in smoothly?
