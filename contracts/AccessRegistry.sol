@@ -28,7 +28,6 @@ contract AccessRegistry is IAccessRegistry {
 
     constructor() {
         owner = msg.sender;
-        // bootstrap: owner is Admin
         _roles[msg.sender][Role.Admin] = true;
         emit RoleGranted(msg.sender, Role.Admin, msg.sender);
     }
@@ -39,7 +38,6 @@ contract AccessRegistry is IAccessRegistry {
         owner = newOwner;
     }
 
-    /// @notice Owner manages roles (keep it simple for hackathon)
     function grantRole(address account, Role role) external onlyOwner {
         if (role == Role.None) revert InvalidRole();
         _roles[account][role] = true;

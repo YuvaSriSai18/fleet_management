@@ -3,8 +3,8 @@ pragma solidity ^0.8.20;
 
 import "./AccessRegistry.sol";
 
-/// @title Delivery Management (Minimal)
-/// @notice Create deliveries; only PoD can mark as Delivered
+/// @title Delivery Management
+/// @notice Handles order lifecycle (create, assign, transit, cancel, deliver)
 contract DeliveryManagement {
     error NotAuthorized();
     error InvalidInput();
@@ -14,32 +14,33 @@ contract DeliveryManagement {
 
     struct Delivery {
         uint256 orderId;
-        uint256 truckId;
+        string truckId; // changed to string
         string origin;
         string destination;
-        uint256 eta;          // unix
+        uint256 eta; // unix timestamp
         Status status;
         address createdBy;
     }
 
-    IAccessRegistry public immutable registry; // central RBAC
-    address public owner;                      // simple owner
-    address public proofOfDelivery;            // the only contract that can set Delivered
+    IAccessRegistry public immutable registry;
+    address public owner;
+    address public proofOfDelivery; // only this can mark Delivered
 
     uint256 private _nextOrderId = 1;
     mapping(uint256 => Delivery) private _deliveries;
+    mapping(uint256 => address) private _assignedCarrier;
 
     event DeliveryCreated(
         uint256 indexed orderId,
-        uint256 truckId,
+        string truckId,
         string origin,
         string destination,
         uint256 eta,
-        address indexed createdBy
+        address indexed by
     );
+    event CarrierAssigned(uint256 indexed orderId, address indexed carrier, address indexed by);
     event StatusUpdated(uint256 indexed orderId, Status newStatus, address indexed by);
     event ProofOfDeliverySet(address indexed pod, address indexed by);
-    event OwnerTransferred(address indexed oldOwner, address indexed newOwner);
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotAuthorized();
@@ -52,22 +53,14 @@ contract DeliveryManagement {
         owner = msg.sender;
     }
 
-    function transferOwnership(address newOwner) external onlyOwner {
-        require(newOwner != address(0), "zero addr");
-        emit OwnerTransferred(owner, newOwner);
-        owner = newOwner;
-    }
-
-    /// @notice Owner sets PoD contract once deployed
     function setProofOfDelivery(address pod) external onlyOwner {
         require(pod != address(0), "zero pod");
         proofOfDelivery = pod;
         emit ProofOfDeliverySet(pod, msg.sender);
     }
 
-    /// @notice Only FleetOwner or Carrier can create a delivery (simple rule)
     function createDelivery(
-        uint256 truckId,
+        string calldata truckId,
         string calldata origin,
         string calldata destination,
         uint256 eta
@@ -77,56 +70,55 @@ contract DeliveryManagement {
             !registry.hasRole(msg.sender, IAccessRegistry.Role.Carrier)
         ) revert NotAuthorized();
 
-        if (truckId == 0 || bytes(origin).length == 0 || bytes(destination).length == 0) {
-            revert InvalidInput();
-        }
+        if (bytes(truckId).length == 0 || bytes(origin).length == 0 || bytes(destination).length == 0) revert InvalidInput();
         if (eta <= block.timestamp) revert InvalidInput();
 
         orderId = _nextOrderId++;
-        _deliveries[orderId] = Delivery({
-            orderId: orderId,
-            truckId: truckId,
-            origin: origin,
-            destination: destination,
-            eta: eta,
-            status: Status.Created,
-            createdBy: msg.sender
-        });
-
+        _deliveries[orderId] = Delivery(orderId, truckId, origin, destination, eta, Status.Created, msg.sender);
         emit DeliveryCreated(orderId, truckId, origin, destination, eta, msg.sender);
     }
 
-    /// @notice Creator or Owner can move to InTransit/Cancelled (but NOT Delivered)
+    function assignCarrier(uint256 orderId, address carrier) external {
+        Delivery storage d = _deliveries[orderId];
+        if (d.orderId == 0) revert DeliveryNotFound();
+        if (msg.sender != d.createdBy && msg.sender != owner) revert NotAuthorized();
+        require(carrier != address(0), "zero carrier");
+        _assignedCarrier[orderId] = carrier;
+        emit CarrierAssigned(orderId, carrier, msg.sender);
+    }
+
     function setStatus(uint256 orderId, Status newStatus) external {
         Delivery storage d = _deliveries[orderId];
         if (d.orderId == 0) revert DeliveryNotFound();
-
-        bool creatorOrOwner = (msg.sender == d.createdBy || msg.sender == owner);
-        if (!creatorOrOwner) revert NotAuthorized();
-
-        // Delivered is reserved for PoD finalize; block it here
+        if (msg.sender != d.createdBy && msg.sender != owner) revert NotAuthorized();
         require(newStatus != Status.Delivered, "Delivered by PoD only");
-
         d.status = newStatus;
         emit StatusUpdated(orderId, newStatus, msg.sender);
     }
 
-    /// @notice Called ONLY by the ProofOfDelivery contract to mark Delivered
     function markDeliveredFromPoD(uint256 orderId) external {
         if (msg.sender != proofOfDelivery) revert NotAuthorized();
-
         Delivery storage d = _deliveries[orderId];
         if (d.orderId == 0) revert DeliveryNotFound();
-
         d.status = Status.Delivered;
         emit StatusUpdated(orderId, Status.Delivered, msg.sender);
     }
 
-    /// Views
     function getDelivery(uint256 orderId) external view returns (Delivery memory) {
         Delivery memory d = _deliveries[orderId];
         if (d.orderId == 0) revert DeliveryNotFound();
         return d;
+    }
+
+    function getAssignedCarrier(uint256 orderId) external view returns (address) {
+        if (_deliveries[orderId].orderId == 0) revert DeliveryNotFound();
+        return _assignedCarrier[orderId];
+    }
+
+    function getStatus(uint256 orderId) external view returns (Status) {
+        Delivery memory d = _deliveries[orderId];
+        if (d.orderId == 0) revert DeliveryNotFound();
+        return d.status;
     }
 
     function nextOrderId() external view returns (uint256) {
