@@ -2,32 +2,54 @@
 pragma solidity ^0.8.20;
 
 interface IAccessRegistry {
-    enum Role { None, Admin, FleetOwner, Carrier, ThirdPartyLogistics, Customer }
+    enum Role {
+        None,
+        Admin,
+        FleetOwner,
+        Carrier,
+        ThirdPartyLogistics,
+        Customer
+    }
+
     function hasRole(address account, Role role) external view returns (bool);
 }
+
 interface IDeliveryManagement {
     function markDeliveredFromPoD(uint256 orderId) external;
-    function getAssignedCarrier(uint256 orderId) external view returns (address);
+
+    function getAssignedCarrier(
+        uint256 orderId
+    ) external view returns (address);
 }
+
 interface IPaymentEscrow {
     function releasePayment(uint256 orderId) external;
 }
 
-/// @title ProofOfDeliverySig
-/// @notice Proof-of-delivery storage + EIP-712 finalize (meta-tx). Minimal read helpers added.
+/// @title ProofOfDelivery with Checkpoints
+/// @notice Supports bulk/single checkpoint addition + marking checkpoints reached
 contract ProofOfDeliverySig {
     /* --------------------------- Errors --------------------------- */
     error NotAuthorized();
     error InvalidInput(string);
     error ProofNotInit();
     error AlreadyFinalized();
-    error SignatureExpired();
-    error BadSigner();
     error LengthMismatch();
+    error CheckpointAlreadyReached();
 
     /* --------------------------- Types --------------------------- */
-    struct Checkpoint { int32 latE6; int32 lonE6; uint40 time; }
-    struct Proof { bool exists; bool finalized; Checkpoint[] checkpoints; }
+    struct Checkpoint {
+        int32 latE6;
+        int32 lonE6;
+        uint40 plannedTime; // optional planned timestamp
+        uint40 actualTime; // 0 if not yet reached
+    }
+
+    struct Proof {
+        bool exists;
+        bool finalized;
+        Checkpoint[] checkpoints;
+    }
 
     /* --------------------------- State --------------------------- */
     IAccessRegistry public immutable registry;
@@ -36,17 +58,24 @@ contract ProofOfDeliverySig {
     address public owner;
 
     mapping(uint256 => Proof) private _proofs;
-    mapping(uint256 => uint256) public nonces; // per-order nonce for replay protection
-
-    /* --------------------------- EIP-712 --------------------------- */
-    bytes32 public immutable DOMAIN_SEPARATOR;
-    bytes32 public constant FINALIZE_TYPEHASH =
-        keccak256("Finalize(uint256 orderId,address payee,uint256 nonce,uint256 deadline)");
 
     /* --------------------------- Events --------------------------- */
     event ProofInitialized(uint256 indexed orderId, address indexed by);
-    event CheckpointAdded(uint256 indexed orderId, int32 latE6, int32 lonE6, uint40 time, address indexed by);
-    event Finalized(uint256 indexed orderId, uint256 time, address indexed by, address indexed signer);
+    event CheckpointAdded(
+        uint256 indexed orderId,
+        uint256 index,
+        int32 latE6,
+        int32 lonE6,
+        uint40 plannedTime,
+        address indexed by
+    );
+    event CheckpointReached(
+        uint256 indexed orderId,
+        uint256 index,
+        uint40 actualTime,
+        address indexed by
+    );
+    event Finalized(uint256 indexed orderId, uint256 time, address indexed by);
     event OwnerTransferred(address indexed oldOwner, address indexed newOwner);
 
     /* --------------------------- Modifiers --------------------------- */
@@ -58,25 +87,18 @@ contract ProofOfDeliverySig {
     constructor(
         address accessRegistry,
         address deliveryContract,
-        address escrowContract,
-        string memory name,
-        string memory version
+        address escrowContract
     ) {
-        require(accessRegistry != address(0) && deliveryContract != address(0) && escrowContract != address(0), "zero addr");
+        require(
+            accessRegistry != address(0) &&
+                deliveryContract != address(0) &&
+                escrowContract != address(0),
+            "zero addr"
+        );
         registry = IAccessRegistry(accessRegistry);
         delivery = IDeliveryManagement(deliveryContract);
         escrow = IPaymentEscrow(escrowContract);
         owner = msg.sender;
-
-        uint256 chainId;
-        assembly { chainId := chainid() }
-        DOMAIN_SEPARATOR = keccak256(abi.encode(
-            keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-            keccak256(bytes(name)),
-            keccak256(bytes(version)),
-            chainId,
-            address(this)
-        ));
     }
 
     function transferOwnership(address newOwner) external onlyOwner {
@@ -86,15 +108,16 @@ contract ProofOfDeliverySig {
     }
 
     function _isUpdater(address a) internal view returns (bool) {
-        return registry.hasRole(a, IAccessRegistry.Role.Admin)
-            || registry.hasRole(a, IAccessRegistry.Role.FleetOwner)
-            || registry.hasRole(a, IAccessRegistry.Role.Carrier)
-            || a == owner;
+        return
+            registry.hasRole(a, IAccessRegistry.Role.Admin) ||
+            registry.hasRole(a, IAccessRegistry.Role.FleetOwner) ||
+            registry.hasRole(a, IAccessRegistry.Role.Carrier) ||
+            a == owner;
     }
 
-    /* --------------------------- Proof lifecycle --------------------------- */
+    /* --------------------------- Proof Lifecycle --------------------------- */
 
-    /// @notice Initialize empty proof for order
+    /// Initialize proof
     function initProof(uint256 orderId) external {
         if (orderId == 0) revert InvalidInput("orderId==0");
         Proof storage p = _proofs[orderId];
@@ -104,123 +127,167 @@ contract ProofOfDeliverySig {
         emit ProofInitialized(orderId, msg.sender);
     }
 
-    /// @notice Create proof and upload multiple checkpoints at once
+    /// Bulk add checkpoints
     function createProofWithCheckpoints(
         uint256 orderId,
         int256[] calldata latE6s,
         int256[] calldata lonE6s,
-        uint256[] calldata ts
+        uint256[] calldata plannedTimes
     ) external {
         if (!_isUpdater(msg.sender)) revert NotAuthorized();
         if (orderId == 0) revert InvalidInput("orderId==0");
 
         uint256 len = latE6s.length;
-        if (len != lonE6s.length || len != ts.length) revert LengthMismatch();
+        if (len != lonE6s.length || len != plannedTimes.length)
+            revert LengthMismatch();
 
         Proof storage p = _proofs[orderId];
         if (!p.exists) {
             p.exists = true;
             p.finalized = false;
             emit ProofInitialized(orderId, msg.sender);
-        } else {
-            if (p.finalized) revert AlreadyFinalized();
+        } else if (p.finalized) {
+            revert AlreadyFinalized();
         }
 
         for (uint256 i = 0; i < len; ++i) {
             int256 lat = latE6s[i];
             int256 lon = lonE6s[i];
-            uint256 t = ts[i];
+            uint256 ts = plannedTimes[i];
 
-            if (lat < type(int32).min || lat > type(int32).max) revert InvalidInput("lat OOB");
-            if (lon < type(int32).min || lon > type(int32).max) revert InvalidInput("lon OOB");
-            if (t > uint256(type(uint40).max)) revert InvalidInput("ts OOB");
+            if (lat < type(int32).min || lat > type(int32).max)
+                revert InvalidInput("lat OOB");
+            if (lon < type(int32).min || lon > type(int32).max)
+                revert InvalidInput("lon OOB");
+            if (ts > type(uint40).max) revert InvalidInput("ts OOB");
 
-            p.checkpoints.push(Checkpoint(int32(lat), int32(lon), uint40(t)));
-            emit CheckpointAdded(orderId, int32(lat), int32(lon), uint40(t), msg.sender);
+            uint256 idx = p.checkpoints.length;
+            p.checkpoints.push(
+                Checkpoint(int32(lat), int32(lon), uint40(ts), 0)
+            );
+            emit CheckpointAdded(
+                orderId,
+                idx,
+                int32(lat),
+                int32(lon),
+                uint40(ts),
+                msg.sender
+            );
         }
     }
 
-    /// @notice Append a single checkpoint
-    function addCheckpoint(uint256 orderId, int256 latE6, int256 lonE6, uint256 ts) external {
+    /// Single checkpoint addition
+    function addCheckpoint(
+        uint256 orderId,
+        int256 latE6,
+        int256 lonE6,
+        uint256 plannedTime
+    ) external {
         if (!_isUpdater(msg.sender)) revert NotAuthorized();
-        if (orderId == 0 || ts == 0) revert InvalidInput("bad input");
-        if (latE6 < type(int32).min || latE6 > type(int32).max) revert InvalidInput("lat OOB");
-        if (lonE6 < type(int32).min || lonE6 > type(int32).max) revert InvalidInput("lon OOB");
-        if (ts > uint256(type(uint40).max)) revert InvalidInput("ts OOB");
+        if (orderId == 0) revert InvalidInput("bad input");
+        if (latE6 < type(int32).min || latE6 > type(int32).max)
+            revert InvalidInput("lat OOB");
+        if (lonE6 < type(int32).min || lonE6 > type(int32).max)
+            revert InvalidInput("lon OOB");
+        if (plannedTime > uint256(type(uint40).max))
+            revert InvalidInput("ts OOB");
 
         Proof storage p = _proofs[orderId];
         if (!p.exists) {
             p.exists = true;
             p.finalized = false;
             emit ProofInitialized(orderId, msg.sender);
-        } else {
-            if (p.finalized) revert AlreadyFinalized();
+        } else if (p.finalized) {
+            revert AlreadyFinalized();
         }
 
-        p.checkpoints.push(Checkpoint(int32(latE6), int32(lonE6), uint40(ts)));
-        emit CheckpointAdded(orderId, int32(latE6), int32(lonE6), uint40(ts), msg.sender);
+        uint256 idx = p.checkpoints.length;
+        p.checkpoints.push(
+            Checkpoint(int32(latE6), int32(lonE6), uint40(plannedTime), 0)
+        );
+        emit CheckpointAdded(
+            orderId,
+            idx,
+            int32(latE6),
+            int32(lonE6),
+            uint40(plannedTime),
+            msg.sender
+        );
     }
 
-    /* --------------------------- EIP-712 Finalize --------------------------- */
-
-    /// @notice Finalize using carrier signature (EIP-712) — relayed by backend
-    function finalizeWithSig(
+    /// Mark checkpoint reached
+    function markCheckpointReached(
         uint256 orderId,
-        address payee,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
+        uint256 index,
+        uint256 actualTime
     ) external {
+        if (!_isUpdater(msg.sender)) revert NotAuthorized();
+        Proof storage p = _proofs[orderId];
+        if (!p.exists) revert ProofNotInit();
+        if (p.finalized) revert AlreadyFinalized();
+        if (index >= p.checkpoints.length) revert InvalidInput("bad index");
+        if (actualTime > type(uint40).max) revert InvalidInput("ts OOB");
+
+        Checkpoint storage cp = p.checkpoints[index];
+        if (cp.actualTime != 0) revert CheckpointAlreadyReached();
+
+        cp.actualTime = uint40(actualTime);
+        emit CheckpointReached(orderId, index, uint40(actualTime), msg.sender);
+    }
+
+    /* --------------------------- Finalization --------------------------- */
+    function finalizeDelivery(uint256 orderId, address payee) external {
         if (orderId == 0 || payee == address(0)) revert InvalidInput("params");
-        if (block.timestamp > deadline) revert SignatureExpired();
 
         Proof storage p = _proofs[orderId];
         if (!p.exists) revert ProofNotInit();
         if (p.finalized) revert AlreadyFinalized();
 
-        uint256 nonce = nonces[orderId]++;
-        bytes32 structHash = keccak256(abi.encode(FINALIZE_TYPEHASH, orderId, payee, nonce, deadline));
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
-        address signer = ecrecover(digest, v, r, s);
-        if (signer == address(0)) revert BadSigner();
-
-        // signer must be assigned carrier OR Admin
+        // Only assigned carrier or Admin can finalize
         address assigned = delivery.getAssignedCarrier(orderId);
-        if (!(signer == assigned || registry.hasRole(signer, IAccessRegistry.Role.Admin))) revert BadSigner();
+        if (
+            !(msg.sender == assigned ||
+                registry.hasRole(msg.sender, IAccessRegistry.Role.Admin))
+        ) {
+            revert NotAuthorized();
+        }
 
-        // finalize: mark and notify DeliveryManagement and Escrow
         p.finalized = true;
         delivery.markDeliveredFromPoD(orderId);
         escrow.releasePayment(orderId);
 
-        emit Finalized(orderId, block.timestamp, msg.sender, signer);
+        emit Finalized(orderId, block.timestamp, msg.sender);
     }
 
-    /* --------------------------- Views / Helpers --------------------------- */
-
+    /* --------------------------- Views --------------------------- */
     function proofExists(uint256 orderId) external view returns (bool) {
         return _proofs[orderId].exists;
     }
 
-    function getProofSummary(uint256 orderId) external view returns (
-        bool exists,
-        bool finalized,
-        uint256 checkpointCount
-    ) {
+    function getProofSummary(
+        uint256 orderId
+    )
+        external
+        view
+        returns (bool exists, bool finalized, uint256 checkpointCount)
+    {
         Proof storage p = _proofs[orderId];
         exists = p.exists;
         finalized = p.finalized;
         checkpointCount = p.checkpoints.length;
     }
 
-    function getCheckpointCount(uint256 orderId) external view returns (uint256) {
+    function getCheckpointCount(
+        uint256 orderId
+    ) external view returns (uint256) {
         Proof storage p = _proofs[orderId];
         if (!p.exists) revert ProofNotInit();
         return p.checkpoints.length;
     }
 
-    function getCheckpoints(uint256 orderId) external view returns (Checkpoint[] memory) {
+    function getCheckpoints(
+        uint256 orderId
+    ) external view returns (Checkpoint[] memory) {
         Proof storage p = _proofs[orderId];
         if (!p.exists) revert ProofNotInit();
         return p.checkpoints;

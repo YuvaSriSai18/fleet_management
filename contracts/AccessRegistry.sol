@@ -4,7 +4,15 @@ pragma solidity ^0.8.20;
 /// @title Access Registry (Minimal RBAC)
 /// @notice Centralized role registry for all contracts
 interface IAccessRegistry {
-    enum Role { None, Admin, FleetOwner, Carrier, ThirdPartyLogistics, Customer }
+    enum Role {
+        None,
+        Admin,
+        FleetOwner,
+        Carrier,
+        ThirdPartyLogistics,
+        Customer
+    }
+
     function hasRole(address account, Role role) external view returns (bool);
 }
 
@@ -18,8 +26,16 @@ contract AccessRegistry is IAccessRegistry {
     mapping(address => mapping(Role => bool)) private _roles;
 
     event OwnerTransferred(address indexed oldOwner, address indexed newOwner);
-    event RoleGranted(address indexed account, Role indexed role, address indexed by);
-    event RoleRevoked(address indexed account, Role indexed role, address indexed by);
+    event RoleGranted(
+        address indexed account,
+        Role indexed role,
+        address indexed by
+    );
+    event RoleRevoked(
+        address indexed account,
+        Role indexed role,
+        address indexed by
+    );
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
@@ -50,7 +66,10 @@ contract AccessRegistry is IAccessRegistry {
         emit RoleRevoked(account, role, msg.sender);
     }
 
-    function hasRole(address account, Role role) public view override returns (bool) {
+    function hasRole(
+        address account,
+        Role role
+    ) public view override returns (bool) {
         return _roles[account][role];
     }
 }

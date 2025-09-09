@@ -13,7 +13,10 @@ contract PaymentEscrow {
     error InvalidAmount();
     error TransferFailed();
 
-    enum TokenType { ETH, ERC20 }
+    enum TokenType {
+        ETH,
+        ERC20
+    }
 
     struct EscrowEntry {
         address payer;
@@ -28,7 +31,13 @@ contract PaymentEscrow {
     address public podContract;
     mapping(uint256 => EscrowEntry) public escrows;
 
-    event EscrowCreated(uint256 indexed orderId, address indexed payer, address indexed payee, uint256 amount, TokenType tokenType);
+    event EscrowCreated(
+        uint256 indexed orderId,
+        address indexed payer,
+        address indexed payee,
+        uint256 amount,
+        TokenType tokenType
+    );
     event PaymentReleased(uint256 indexed orderId, address to, uint256 amount);
     event Refunded(uint256 indexed orderId, address to, uint256 amount);
 
@@ -56,18 +65,45 @@ contract PaymentEscrow {
         if (msg.value == 0) revert InvalidAmount();
         if (escrows[orderId].payer != address(0)) revert EscrowExists();
 
-        escrows[orderId] = EscrowEntry(msg.sender, payee, TokenType.ETH, address(0), msg.value, false);
-        emit EscrowCreated(orderId, msg.sender, payee, msg.value, TokenType.ETH);
+        escrows[orderId] = EscrowEntry(
+            msg.sender,
+            payee,
+            TokenType.ETH,
+            address(0),
+            msg.value,
+            false
+        );
+        emit EscrowCreated(
+            orderId,
+            msg.sender,
+            payee,
+            msg.value,
+            TokenType.ETH
+        );
     }
 
-    function createEscrowERC20(uint256 orderId, address payee, address token, uint256 amount) external {
-        if (orderId == 0 || payee == address(0) || token == address(0)) revert InvalidAddress();
+    function createEscrowERC20(
+        uint256 orderId,
+        address payee,
+        address token,
+        uint256 amount
+    ) external {
+        if (orderId == 0 || payee == address(0) || token == address(0))
+            revert InvalidAddress();
         if (amount == 0) revert InvalidAmount();
         if (escrows[orderId].payer != address(0)) revert EscrowExists();
 
-        if (!IERC20(token).transferFrom(msg.sender, address(this), amount)) revert TransferFailed();
+        if (!IERC20(token).transferFrom(msg.sender, address(this), amount))
+            revert TransferFailed();
 
-        escrows[orderId] = EscrowEntry(msg.sender, payee, TokenType.ERC20, token, amount, false);
+        escrows[orderId] = EscrowEntry(
+            msg.sender,
+            payee,
+            TokenType.ERC20,
+            token,
+            amount,
+            false
+        );
         emit EscrowCreated(orderId, msg.sender, payee, amount, TokenType.ERC20);
     }
 
@@ -78,10 +114,11 @@ contract PaymentEscrow {
 
         e.released = true;
         if (e.tokenType == TokenType.ETH) {
-            (bool sent,) = e.payee.call{ value: e.amount }("");
+            (bool sent, ) = e.payee.call{value: e.amount}("");
             if (!sent) revert TransferFailed();
         } else {
-            if (!IERC20(e.token).transfer(e.payee, e.amount)) revert TransferFailed();
+            if (!IERC20(e.token).transfer(e.payee, e.amount))
+                revert TransferFailed();
         }
 
         emit PaymentReleased(orderId, e.payee, e.amount);
@@ -95,10 +132,11 @@ contract PaymentEscrow {
 
         e.released = true;
         if (e.tokenType == TokenType.ETH) {
-            (bool sent,) = e.payer.call{ value: e.amount }("");
+            (bool sent, ) = e.payer.call{value: e.amount}("");
             if (!sent) revert TransferFailed();
         } else {
-            if (!IERC20(e.token).transfer(e.payer, e.amount)) revert TransferFailed();
+            if (!IERC20(e.token).transfer(e.payer, e.amount))
+                revert TransferFailed();
         }
 
         emit Refunded(orderId, e.payer, e.amount);
@@ -106,7 +144,9 @@ contract PaymentEscrow {
 
     // 🔹 New Read Functions
 
-    function getEscrow(uint256 orderId) external view returns (EscrowEntry memory) {
+    function getEscrow(
+        uint256 orderId
+    ) external view returns (EscrowEntry memory) {
         EscrowEntry memory e = escrows[orderId];
         if (e.payer == address(0)) revert EscrowNotFound();
         return e;

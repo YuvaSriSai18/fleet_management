@@ -10,7 +10,12 @@ contract DeliveryManagement {
     error InvalidInput();
     error DeliveryNotFound();
 
-    enum Status { Created, InTransit, Delivered, Cancelled }
+    enum Status {
+        Created,
+        InTransit,
+        Delivered,
+        Cancelled
+    }
 
     struct Delivery {
         uint256 orderId;
@@ -38,8 +43,16 @@ contract DeliveryManagement {
         uint256 eta,
         address indexed by
     );
-    event CarrierAssigned(uint256 indexed orderId, address indexed carrier, address indexed by);
-    event StatusUpdated(uint256 indexed orderId, Status newStatus, address indexed by);
+    event CarrierAssigned(
+        uint256 indexed orderId,
+        address indexed carrier,
+        address indexed by
+    );
+    event StatusUpdated(
+        uint256 indexed orderId,
+        Status newStatus,
+        address indexed by
+    );
     event ProofOfDeliverySet(address indexed pod, address indexed by);
 
     modifier onlyOwner() {
@@ -70,18 +83,38 @@ contract DeliveryManagement {
             !registry.hasRole(msg.sender, IAccessRegistry.Role.Carrier)
         ) revert NotAuthorized();
 
-        if (bytes(truckId).length == 0 || bytes(origin).length == 0 || bytes(destination).length == 0) revert InvalidInput();
+        if (
+            bytes(truckId).length == 0 ||
+            bytes(origin).length == 0 ||
+            bytes(destination).length == 0
+        ) revert InvalidInput();
         if (eta <= block.timestamp) revert InvalidInput();
 
         orderId = _nextOrderId++;
-        _deliveries[orderId] = Delivery(orderId, truckId, origin, destination, eta, Status.Created, msg.sender);
-        emit DeliveryCreated(orderId, truckId, origin, destination, eta, msg.sender);
+        _deliveries[orderId] = Delivery(
+            orderId,
+            truckId,
+            origin,
+            destination,
+            eta,
+            Status.Created,
+            msg.sender
+        );
+        emit DeliveryCreated(
+            orderId,
+            truckId,
+            origin,
+            destination,
+            eta,
+            msg.sender
+        );
     }
 
     function assignCarrier(uint256 orderId, address carrier) external {
         Delivery storage d = _deliveries[orderId];
         if (d.orderId == 0) revert DeliveryNotFound();
-        if (msg.sender != d.createdBy && msg.sender != owner) revert NotAuthorized();
+        if (msg.sender != d.createdBy && msg.sender != owner)
+            revert NotAuthorized();
         require(carrier != address(0), "zero carrier");
         _assignedCarrier[orderId] = carrier;
         emit CarrierAssigned(orderId, carrier, msg.sender);
@@ -90,7 +123,11 @@ contract DeliveryManagement {
     function setStatus(uint256 orderId, Status newStatus) external {
         Delivery storage d = _deliveries[orderId];
         if (d.orderId == 0) revert DeliveryNotFound();
-        if (msg.sender != d.createdBy && msg.sender != owner) revert NotAuthorized();
+        if (
+            msg.sender != d.createdBy &&
+            msg.sender != owner &&
+            msg.sender != _assignedCarrier[orderId]
+        ) revert NotAuthorized();
         require(newStatus != Status.Delivered, "Delivered by PoD only");
         d.status = newStatus;
         emit StatusUpdated(orderId, newStatus, msg.sender);
@@ -104,13 +141,17 @@ contract DeliveryManagement {
         emit StatusUpdated(orderId, Status.Delivered, msg.sender);
     }
 
-    function getDelivery(uint256 orderId) external view returns (Delivery memory) {
+    function getDelivery(
+        uint256 orderId
+    ) external view returns (Delivery memory) {
         Delivery memory d = _deliveries[orderId];
         if (d.orderId == 0) revert DeliveryNotFound();
         return d;
     }
 
-    function getAssignedCarrier(uint256 orderId) external view returns (address) {
+    function getAssignedCarrier(
+        uint256 orderId
+    ) external view returns (address) {
         if (_deliveries[orderId].orderId == 0) revert DeliveryNotFound();
         return _assignedCarrier[orderId];
     }
