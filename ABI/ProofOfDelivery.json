@@ -10,6 +10,11 @@
                 "internalType": "address",
                 "name": "deliveryContract",
                 "type": "address"
+            },
+            {
+                "internalType": "address",
+                "name": "escrowContract",
+                "type": "address"
             }
         ],
         "stateMutability": "nonpayable",
@@ -21,10 +26,15 @@
         "type": "error"
     },
     {
+        "inputs": [],
+        "name": "CheckpointAlreadyReached",
+        "type": "error"
+    },
+    {
         "inputs": [
             {
                 "internalType": "string",
-                "name": "reason",
+                "name": "",
                 "type": "string"
             }
         ],
@@ -33,18 +43,12 @@
     },
     {
         "inputs": [],
-        "name": "NotAuthorized",
+        "name": "LengthMismatch",
         "type": "error"
     },
     {
-        "inputs": [
-            {
-                "internalType": "string",
-                "name": "field",
-                "type": "string"
-            }
-        ],
-        "name": "OutOfRange",
+        "inputs": [],
+        "name": "NotAuthorized",
         "type": "error"
     },
     {
@@ -63,6 +67,12 @@
             },
             {
                 "indexed": false,
+                "internalType": "uint256",
+                "name": "index",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
                 "internalType": "int32",
                 "name": "latE6",
                 "type": "int32"
@@ -76,7 +86,7 @@
             {
                 "indexed": false,
                 "internalType": "uint40",
-                "name": "time",
+                "name": "plannedTime",
                 "type": "uint40"
             },
             {
@@ -87,6 +97,37 @@
             }
         ],
         "name": "CheckpointAdded",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "uint256",
+                "name": "orderId",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint256",
+                "name": "index",
+                "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "uint40",
+                "name": "actualTime",
+                "type": "uint40"
+            },
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "by",
+                "type": "address"
+            }
+        ],
+        "name": "CheckpointReached",
         "type": "event"
     },
     {
@@ -171,11 +212,39 @@
             },
             {
                 "internalType": "uint256",
-                "name": "ts",
+                "name": "plannedTime",
                 "type": "uint256"
             }
         ],
         "name": "addCheckpoint",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "orderId",
+                "type": "uint256"
+            },
+            {
+                "internalType": "int256[]",
+                "name": "latE6s",
+                "type": "int256[]"
+            },
+            {
+                "internalType": "int256[]",
+                "name": "lonE6s",
+                "type": "int256[]"
+            },
+            {
+                "internalType": "uint256[]",
+                "name": "plannedTimes",
+                "type": "uint256[]"
+            }
+        ],
+        "name": "createProofWithCheckpoints",
         "outputs": [],
         "stateMutability": "nonpayable",
         "type": "function"
@@ -194,6 +263,37 @@
         "type": "function"
     },
     {
+        "inputs": [],
+        "name": "escrow",
+        "outputs": [
+            {
+                "internalType": "contract IPaymentEscrow",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "orderId",
+                "type": "uint256"
+            },
+            {
+                "internalType": "address",
+                "name": "payee",
+                "type": "address"
+            }
+        ],
+        "name": "finalizeDelivery",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
         "inputs": [
             {
                 "internalType": "uint256",
@@ -201,9 +301,15 @@
                 "type": "uint256"
             }
         ],
-        "name": "finalize",
-        "outputs": [],
-        "stateMutability": "nonpayable",
+        "name": "getCheckpointCount",
+        "outputs": [
+            {
+                "internalType": "uint256",
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
         "type": "function"
     },
     {
@@ -230,13 +336,47 @@
                     },
                     {
                         "internalType": "uint40",
-                        "name": "time",
+                        "name": "plannedTime",
+                        "type": "uint40"
+                    },
+                    {
+                        "internalType": "uint40",
+                        "name": "actualTime",
                         "type": "uint40"
                     }
                 ],
-                "internalType": "struct ProofOfDelivery.Checkpoint[]",
+                "internalType": "struct ProofOfDeliverySig.Checkpoint[]",
                 "name": "",
                 "type": "tuple[]"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "orderId",
+                "type": "uint256"
+            }
+        ],
+        "name": "getProofSummary",
+        "outputs": [
+            {
+                "internalType": "bool",
+                "name": "exists",
+                "type": "bool"
+            },
+            {
+                "internalType": "bool",
+                "name": "finalized",
+                "type": "bool"
+            },
+            {
+                "internalType": "uint256",
+                "name": "checkpointCount",
+                "type": "uint256"
             }
         ],
         "stateMutability": "view",
@@ -272,6 +412,29 @@
             }
         ],
         "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "orderId",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint256",
+                "name": "index",
+                "type": "uint256"
+            },
+            {
+                "internalType": "uint256",
+                "name": "actualTime",
+                "type": "uint256"
+            }
+        ],
+        "name": "markCheckpointReached",
+        "outputs": [],
+        "stateMutability": "nonpayable",
         "type": "function"
     },
     {

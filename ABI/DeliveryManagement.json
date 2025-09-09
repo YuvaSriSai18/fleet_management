@@ -35,10 +35,35 @@
                 "type": "uint256"
             },
             {
-                "indexed": false,
+                "indexed": true,
+                "internalType": "address",
+                "name": "carrier",
+                "type": "address"
+            },
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "by",
+                "type": "address"
+            }
+        ],
+        "name": "CarrierAssigned",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
                 "internalType": "uint256",
-                "name": "truckId",
+                "name": "orderId",
                 "type": "uint256"
+            },
+            {
+                "indexed": false,
+                "internalType": "string",
+                "name": "truckId",
+                "type": "string"
             },
             {
                 "indexed": false,
@@ -61,30 +86,11 @@
             {
                 "indexed": true,
                 "internalType": "address",
-                "name": "createdBy",
+                "name": "by",
                 "type": "address"
             }
         ],
         "name": "DeliveryCreated",
-        "type": "event"
-    },
-    {
-        "anonymous": false,
-        "inputs": [
-            {
-                "indexed": true,
-                "internalType": "address",
-                "name": "oldOwner",
-                "type": "address"
-            },
-            {
-                "indexed": true,
-                "internalType": "address",
-                "name": "newOwner",
-                "type": "address"
-            }
-        ],
-        "name": "OwnerTransferred",
         "type": "event"
     },
     {
@@ -135,8 +141,26 @@
         "inputs": [
             {
                 "internalType": "uint256",
-                "name": "truckId",
+                "name": "orderId",
                 "type": "uint256"
+            },
+            {
+                "internalType": "address",
+                "name": "carrier",
+                "type": "address"
+            }
+        ],
+        "name": "assignCarrier",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "string",
+                "name": "truckId",
+                "type": "string"
             },
             {
                 "internalType": "string",
@@ -173,6 +197,25 @@
                 "type": "uint256"
             }
         ],
+        "name": "getAssignedCarrier",
+        "outputs": [
+            {
+                "internalType": "address",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "orderId",
+                "type": "uint256"
+            }
+        ],
         "name": "getDelivery",
         "outputs": [
             {
@@ -183,9 +226,9 @@
                         "type": "uint256"
                     },
                     {
-                        "internalType": "uint256",
+                        "internalType": "string",
                         "name": "truckId",
-                        "type": "uint256"
+                        "type": "string"
                     },
                     {
                         "internalType": "string",
@@ -216,6 +259,25 @@
                 "internalType": "struct DeliveryManagement.Delivery",
                 "name": "",
                 "type": "tuple"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "uint256",
+                "name": "orderId",
+                "type": "uint256"
+            }
+        ],
+        "name": "getStatus",
+        "outputs": [
+            {
+                "internalType": "enum DeliveryManagement.Status",
+                "name": "",
+                "type": "uint8"
             }
         ],
         "stateMutability": "view",
@@ -313,19 +375,6 @@
             }
         ],
         "name": "setStatus",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {
-                "internalType": "address",
-                "name": "newOwner",
-                "type": "address"
-            }
-        ],
-        "name": "transferOwnership",
         "outputs": [],
         "stateMutability": "nonpayable",
         "type": "function"

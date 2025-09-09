@@ -1,174 +1,189 @@
-# 🚚 Fleet Delivery + Escrow System – Overview
+# 📦 Decentralized Delivery & Payment System
 
-This system is built with **four smart contracts** that work together to manage delivery orders, track proof of delivery, and handle payments securely via escrow.
-
----
-
-## 1. **AccessRegistry.sol**
-
-### Purpose
-
-* Acts as the **role manager** for the system.
-* Controls who can perform critical actions (FleetOwner, Carrier, Customer).
-
-### Key Features
-
-* `assignRole(address, Role)` – Owner assigns a role.
-* `revokeRole(address, Role)` – Owner revokes a role.
-* `hasRole(address, Role)` – Used by other contracts to validate permissions.
-
-### Why it matters
-
-All other contracts **trust AccessRegistry** to know “who is who”.
+This project implements a modular system for **delivery lifecycle management** with **escrow-based payments** and **proof-of-delivery verification**.
+It ensures secure, transparent, and role-based logistics operations.
 
 ---
 
-## 2. **DeliveryManagement.sol**
+## 🔹 Contracts Overview
 
-### Purpose
+### 1. **AccessRegistry.sol**
 
-* Manages **delivery lifecycle** (Created → InTransit → Delivered → Cancelled).
-* Enforces that only `ProofOfDelivery` can finalize delivery.
+Minimal **Role-Based Access Control (RBAC)** used by all other contracts.
 
-### Key Functions
+* **Roles**:
 
-* `createDelivery(orderId, customer, carrier)` – Registers a delivery.
-* `updateStatus(orderId, Status)` – Changes state (except Delivered).
-* `markDeliveredFromPoD(orderId)` – Marks a delivery Delivered when PoD finalizes.
+  * `Admin` – System administrator
+  * `FleetOwner` – Manages fleet & creates deliveries
+  * `Carrier` – Assigned to execute deliveries
+  * `ThirdPartyLogistics` – External logistics partners
+  * `Customer` – End-user requesting deliveries
 
-### Why it matters
+* **Core Functions**:
 
-This contract is the **source of truth** for the state of each order.
-It also acts as the bridge between **ProofOfDelivery** and **Escrow**.
-
----
-
-## 3. **ProofOfDelivery.sol**
-
-### Purpose
-
-* Records GPS checkpoints and allows **finalization** of delivery.
-* When finalized, it tells `DeliveryManagement` to mark the order as Delivered.
-
-### Key Functions
-
-* `addCheckpoint(orderId, lat, lon, ts)` – Logs location updates.
-* `finalize(orderId)` – Finalizes proof and triggers delivery completion.
-* `getCheckpoints(orderId)` – View checkpoints.
-
-### Why it matters
-
-Ensures that **only authorized actors** (FleetOwner/Carrier) can finalize delivery, preventing fraud.
+  * `grantRole(account, role)` → Assigns a role
+  * `revokeRole(account, role)` → Removes a role
+  * `hasRole(account, role)` → Checks if account has role
+  * `transferOwnership(newOwner)` → Transfers ownership
 
 ---
 
-## 4. **Escrow\.sol (PaymentEscrow)**
+### 2. **DeliveryManagement.sol**
 
-### Purpose
+Manages the **lifecycle of deliveries**.
 
-* Holds funds until delivery is completed.
-* Releases payment automatically once Delivery is finalized.
+* **Delivery Status**: `Created → InTransit → Delivered → Cancelled`
 
-### Key Functions
+* **Core Functions**:
 
-* `createEscrowETH(orderId, payee)` – Customer deposits ETH.
-* `createEscrowERC20(orderId, token, payee, amount)` – Deposit tokens.
-* `releasePayment(orderId)` – Sends funds to Carrier (only callable by Delivery contract).
-* `refund(orderId)` – Allows payer to reclaim funds before delivery.
-* `applyPenalty(orderId, penalty)` – Admin can reduce payment for violations.
+  * `createDelivery(truckId, origin, destination, eta)`
 
-### Why it matters
+    * Only **FleetOwner** or **Carrier** can create
+    * Generates a unique `orderId`
+  * `assignCarrier(orderId, carrier)`
 
-Protects both **customers** and **carriers** by ensuring money is only transferred if delivery is successful.
+    * Assigns a carrier to the delivery
+  * `setStatus(orderId, newStatus)`
 
----
+    * Updates status (except Delivered)
+  * `markDeliveredFromPoD(orderId)`
 
-## 🔗 How They Work Together
+    * Only **ProofOfDelivery contract** can mark as Delivered
+  * `getDelivery(orderId)` → Returns full delivery info
 
-Here’s the flow:
+* **Events**:
 
-1. **Setup Roles**
-
-   * Owner assigns roles via `AccessRegistry` (FleetOwner, Carrier, Customer).
-
-2. **Create Delivery**
-
-   * FleetOwner calls `createDelivery` in `DeliveryManagement`.
-   * Customer simultaneously funds escrow via `createEscrowETH`.
-
-3. **In Transit**
-
-   * Carrier updates checkpoints in `ProofOfDelivery`. (Optional)
-
-4. **Finalize Delivery**
-
-   * Carrier/FleetOwner calls `finalize(orderId)` in PoD.
-   * PoD → calls `markDeliveredFromPoD(orderId)` in DeliveryManagement.
-   * DeliveryManagement → calls `releasePayment(orderId)` in Escrow.
-   * Escrow → pays Carrier.
+  * `DeliveryCreated`, `CarrierAssigned`, `StatusUpdated`, `ProofOfDeliverySet`
 
 ---
 
-## 🔧 Deployment & Connection Steps
+### 3. **PaymentEscrow\.sol**
 
-1. **Deploy AccessRegistry**
-   Save address.
+Handles **escrowed payments** between **payer (customer)** and **payee (carrier/fleet)**.
 
-2. **Deploy DeliveryManagement** (pass AccessRegistry address).
-   Save address.
+* **Supports**:
 
-3. **Deploy ProofOfDelivery** (pass AccessRegistry + DeliveryManagement).
-   Call `DeliveryManagement.setProofOfDelivery(podAddress)`.
+  * ETH payments
+  * ERC20 token payments
 
-4. **Deploy Escrow** (pass DeliveryManagement address).
-   Call `DeliveryManagement.setEscrow(escrowAddress)` if you extend it.
+* **Core Functions**:
 
-Now all 4 contracts are connected.
+  * `createEscrowETH(orderId, payee)` – Lock ETH for delivery
+  * `createEscrowERC20(orderId, payee, token, amount)` – Lock ERC20 tokens
+  * `releasePayment(orderId)` – Releases funds (only PoD contract)
+  * `refund(orderId)` – Refund to payer (if not released)
+  * Read-only helpers: `getEscrow`, `isPaid`, `getPayer`, `getPayee`, `getAmount`
+
+* **Events**:
+
+  * `EscrowCreated`, `PaymentReleased`, `Refunded`
 
 ---
 
-## 🌐 Frontend Integration
+### 4. **ProofOfDelivery.sol**
 
-From frontend (React + ethers.js):
+Provides a **checkpoint-based Proof of Delivery (PoD)** mechanism.
 
-### 1. Connect to Contracts
+* **Workflow**:
 
-```js
-import { ethers } from "ethers";
-import AccessABI from "./abis/AccessRegistry.json";
-import DeliveryABI from "./abis/DeliveryManagement.json";
-import PodABI from "./abis/ProofOfDelivery.json";
-import EscrowABI from "./abis/Escrow.json";
+  1. **Initialize proof** (`initProof`) for an order
+  2. **Add checkpoints** (planned route locations & times)
+  3. **Mark checkpoints reached** during transit
+  4. **Finalize delivery**:
 
-const provider = new ethers.BrowserProvider(window.ethereum);
-const signer = await provider.getSigner();
+     * Calls `DeliveryManagement.markDeliveredFromPoD()`
+     * Calls `PaymentEscrow.releasePayment()`
 
-const access = new ethers.Contract(ACCESS_ADDR, AccessABI, signer);
-const delivery = new ethers.Contract(DELIVERY_ADDR, DeliveryABI, signer);
-const pod = new ethers.Contract(POD_ADDR, PodABI, signer);
-const escrow = new ethers.Contract(ESCROW_ADDR, EscrowABI, signer);
-```
+* **Core Functions**:
 
-### 2. Example Actions
+  * `createProofWithCheckpoints(orderId, lats, lons, times)` → Bulk checkpoint setup
+  * `addCheckpoint(orderId, lat, lon, time)` → Add single checkpoint
+  * `markCheckpointReached(orderId, index, actualTime)` → Mark progress
+  * `finalizeDelivery(orderId, payee)` → Marks delivery as completed & triggers payment
 
-* **Customer funds escrow:**
+* **Events**:
 
-```js
-await escrow.createEscrowETH(orderId, carrierAddr, { value: ethers.parseEther("1.0") });
-```
+  * `ProofInitialized`, `CheckpointAdded`, `CheckpointReached`, `Finalized`
 
-* **Carrier finalizes delivery:**
+---
 
-```js
-await pod.finalize(orderId);
-```
+## 🔄 Contract Interactions
 
-* **Listen for events:**
+1. **Setup**
 
-```js
-escrow.on("EscrowReleased", (orderId, amount, to) => {
-  console.log("Payment sent:", orderId, amount, to);
-});
+   * Deploy `AccessRegistry` → Set roles
+   * Deploy `DeliveryManagement` (requires registry)
+   * Deploy `PaymentEscrow`
+   * Deploy `ProofOfDelivery` (requires registry, delivery, escrow)
+   * Set PoD contract in `DeliveryManagement` & `PaymentEscrow`
+
+2. **Delivery Lifecycle**
+
+   * FleetOwner/Carrier → `createDelivery()`
+   * Assign Carrier → `assignCarrier()`
+   * Customer → `createEscrowETH/ERC20()` (locks funds)
+
+3. **Proof of Delivery**
+
+   * Admin/Carrier/FleetOwner → `createProofWithCheckpoints()`
+   * As checkpoints are reached → `markCheckpointReached()`
+
+4. **Finalization**
+
+   * Carrier/Admin → `finalizeDelivery()`
+
+     * Marks delivery as Delivered
+     * Releases payment from escrow to payee
+
+---
+
+## ✅ Example Flow
+
+1. Admin grants roles to FleetOwner, Carrier, Customer.
+2. FleetOwner creates delivery:
+
+   ```solidity
+   createDelivery("TRUCK123", "Delhi", "Mumbai", 1750000000);
+   ```
+3. Customer locks funds:
+
+   ```solidity
+   createEscrowETH{value: 5 ether}(orderId, carrier);
+   ```
+4. Carrier adds checkpoints (route stops).
+5. During transit, Carrier marks checkpoints as reached.
+6. On delivery, Carrier/Admin finalizes:
+
+   ```solidity
+   finalizeDelivery(orderId, carrier);
+   ```
+
+   → Delivery marked as **Delivered**
+   → Escrow releases payment to **Carrier**
+
+---
+
+## ⚡ Features
+
+* 🔐 **Role-based security** via `AccessRegistry`
+* 🚚 **End-to-end delivery tracking** with checkpoints
+* 💰 **Secure payments** via escrow (ETH & ERC20)
+* 🔗 **Cross-contract interaction** ensures payments only release on delivery proof
+* 📜 **Transparent audit logs** through events
+
+---
+
+## 🛠 Deployment & Testing
+
+```bash
+# Compile
+npx hardhat compile
+
+# Deploy
+npx hardhat run scripts/deploy.js --network <network>
+
+# Run tests
+npx hardhat test
 ```
 
 ---
